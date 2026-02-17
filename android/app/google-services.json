@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "741805447766",
+    "project_id": "fn-solution-org",
+    "storage_bucket": "fn-solution-org.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:741805447766:android:7c25426ce9acd5a25479f7",
+        "android_client_info": {
+          "package_name": "com.example.fnsolutions"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDhXFRPtT1XiE6PEAbFsUjKq8su9lDZy0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
