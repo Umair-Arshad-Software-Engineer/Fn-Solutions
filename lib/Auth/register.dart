@@ -122,6 +122,7 @@ class _RegistrationScreenState extends State<RegistrationScreen>
       Map<String, dynamic> userData = {
         'name': _nameController.text.trim(),
         'email': _emailController.text.trim(),
+        'password':_passwordController.text.trim(),
         'phone': _phoneController.text.trim(),
         'role': _selectedRole,
         'createdAt': DateTime.now().toIso8601String(),

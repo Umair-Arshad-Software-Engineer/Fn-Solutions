@@ -28,6 +28,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
   FirebaseDatabase.instance.ref().child('bills');
   final DatabaseReference _usersRef =
   FirebaseDatabase.instance.ref().child('users');
+  final DatabaseReference _itemsRef =
+  FirebaseDatabase.instance.ref().child('items');
 
   // Material Items (from quotation or new)
   List<QuotationItem> _materialItems = [];
@@ -50,7 +52,13 @@ class _CreateBillScreenState extends State<CreateBillScreen>
   double _amountPaid = 0.0;
   String _paymentStatus = 'Unpaid';
   String _selectedPaymentMethod = 'Cash';
-  final List<String> _paymentMethods = ['Cash', 'Card', 'Bank Transfer', 'Cheque', 'Online'];
+  final List<String> _paymentMethods = [
+    'Cash',
+    'Card',
+    'Bank Transfer',
+    'Cheque',
+    'Online'
+  ];
 
   TextEditingController _notesController = TextEditingController();
   TextEditingController _termsController = TextEditingController();
@@ -156,9 +164,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
     if (widget.quotation != null) {
       setState(() {
         // Copy material items from quotation
-        _materialItems = widget.quotation!.items
-            .map((item) => item.copyWith())
-            .toList();
+        _materialItems =
+            widget.quotation!.items.map((item) => item.copyWith()).toList();
 
         // Copy customer details and other info
         _notesController.text = widget.quotation!.notes ?? '';
@@ -192,15 +199,16 @@ class _CreateBillScreenState extends State<CreateBillScreen>
     });
   }
 
-  void _updateMaterialItem(int index, {
-    String? name,
-    String? description,
-    double? quantity,
-    double? rate,
-    DiscountType? discountType,
-    double? discountValue,
-    double? taxPercent,
-  }) {
+  void _updateMaterialItem(
+      int index, {
+        String? name,
+        String? description,
+        double? quantity,
+        double? rate,
+        DiscountType? discountType,
+        double? discountValue,
+        double? taxPercent,
+      }) {
     setState(() {
       var item = _materialItems[index];
 
@@ -218,7 +226,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
       if (item.discountType == DiscountType.percentage) {
         item.discountAmount = subtotal * (item.discountValue / 100);
       } else {
-        item.discountAmount = item.discountValue > subtotal ? subtotal : item.discountValue;
+        item.discountAmount =
+        item.discountValue > subtotal ? subtotal : item.discountValue;
       }
 
       double afterDiscount = subtotal - item.discountAmount;
@@ -253,14 +262,15 @@ class _CreateBillScreenState extends State<CreateBillScreen>
     });
   }
 
-  void _updateLabourItem(int index, {
-    String? name,
-    String? description,
-    double? hours,
-    double? rate,
-    DiscountType? discountType,
-    double? discountValue,
-  }) {
+  void _updateLabourItem(
+      int index, {
+        String? name,
+        String? description,
+        double? hours,
+        double? rate,
+        DiscountType? discountType,
+        double? discountValue,
+      }) {
     setState(() {
       var item = _labourItems[index];
 
@@ -277,7 +287,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
       if (item.discountType == DiscountType.percentage) {
         item.discountAmount = subtotal * (item.discountValue / 100);
       } else {
-        item.discountAmount = item.discountValue > subtotal ? subtotal : item.discountValue;
+        item.discountAmount =
+        item.discountValue > subtotal ? subtotal : item.discountValue;
       }
 
       item.total = subtotal - item.discountAmount;
@@ -329,7 +340,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
       _materialDiscountTotal += item.discountAmount;
       _materialTaxTotal += item.taxAmount;
     }
-    _materialTotal = _materialSubtotal - _materialDiscountTotal + _materialTaxTotal;
+    _materialTotal =
+        _materialSubtotal - _materialDiscountTotal + _materialTaxTotal;
 
     // Calculate Labour Totals only if labour is provided by us
     _labourSubtotal = 0.0;
@@ -351,7 +363,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
 
     // Calculate grand discount
     if (_grandDiscountType == DiscountType.percentage) {
-      _grandDiscountAmount = beforeGrandDiscount * (_grandDiscountValue / 100);
+      _grandDiscountAmount =
+          beforeGrandDiscount * (_grandDiscountValue / 100);
     } else {
       _grandDiscountAmount = _grandDiscountValue > beforeGrandDiscount
           ? beforeGrandDiscount
@@ -369,9 +382,87 @@ class _CreateBillScreenState extends State<CreateBillScreen>
     String year = now.year.toString();
     String month = now.month.toString().padLeft(2, '0');
     String day = now.day.toString().padLeft(2, '0');
-    String random = (now.millisecondsSinceEpoch % 10000).toString().padLeft(4, '0');
+    String random =
+    (now.millisecondsSinceEpoch % 10000).toString().padLeft(4, '0');
     return 'INV-${year}${month}${day}-${random}';
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  Future<void> _deductItemQuantities(List<QuotationItem> items) async {
+    List<String> failedItems = [];
+
+    for (final item in items) {
+      if (item.name.trim().isEmpty || item.quantity <= 0) continue;
+
+      final snapshot = await _itemsRef
+          .orderByChild('itemName')
+          .equalTo(item.name.trim())
+          .get();
+
+      if (!snapshot.exists || snapshot.value == null) {
+        failedItems.add(item.name);
+        continue;
+      }
+
+      final matchedItems = Map<String, dynamic>.from(snapshot.value as Map);
+
+      for (final entry in matchedItems.entries) {
+        final itemRef = _itemsRef.child(entry.key);
+        final currentData = Map<String, dynamic>.from(entry.value as Map);
+
+        try {
+          // Get current quantity
+          final double currentQty = (currentData['qtyOnHand'] ?? 0).toDouble();
+          final double newQty = (currentQty - item.quantity).clamp(0.0, double.infinity);
+
+          // Create update map with only the fields that need to be updated
+          // and ensure all required fields are present
+          final Map<String, dynamic> updateMap = {
+            'qtyOnHand': newQty,
+            'lastUpdated': DateTime.now().toIso8601String(),
+          };
+
+          // Ensure all required fields exist in the current data
+          // Add any missing required fields if they don't exist
+          if (!currentData.containsKey('itemName')) {
+            updateMap['itemName'] = item.name.trim();
+          }
+          if (!currentData.containsKey('salePrice')) {
+            updateMap['salePrice'] = currentData['salePrice'] ?? 0.0;
+          }
+          if (!currentData.containsKey('qtyOnHand')) {
+            updateMap['qtyOnHand'] = newQty;
+          }
+
+          // Use update instead of transaction to avoid complex validation issues
+          await itemRef.update(updateMap);
+
+          // Verify the update was successful
+          final verifySnapshot = await itemRef.get();
+          if (verifySnapshot.exists) {
+            final updatedData = verifySnapshot.value as Map;
+            final double updatedQty = (updatedData['qtyOnHand'] ?? 0).toDouble();
+
+            if (updatedQty > newQty + 0.01) { // Allow small floating point differences
+              failedItems.add('${item.name} (Update verification failed)');
+            }
+          } else {
+            failedItems.add('${item.name} (Item not found after update)');
+          }
+        } catch (e) {
+          print('Error deducting stock for ${item.name}: $e');
+          failedItems.add('${item.name} (Error: $e)');
+        }
+
+        break;
+      }
+    }
+
+    if (failedItems.isNotEmpty) {
+      throw Exception('Failed to deduct stock for: ${failedItems.join(", ")}');
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> _saveBill() async {
     // Validate items
@@ -393,6 +484,11 @@ class _CreateBillScreenState extends State<CreateBillScreen>
         _showErrorSnackBar('Rate must be greater than 0');
         return;
       }
+    }
+
+    // ✅ NEW: Check stock availability before proceeding
+    if (!await _checkStockAvailability(_materialItems)) {
+      return;
     }
 
     // Only validate labour items if labour is provided by us
@@ -431,7 +527,9 @@ class _CreateBillScreenState extends State<CreateBillScreen>
         customerPhone: widget.quotation?.customerPhone ?? '',
         customerAddress: widget.quotation?.customerAddress,
         materialItems: List.from(_materialItems),
-        labourItems: _isLabourProvidedByUs ? List.from(_labourItems) : [], // Only save labour items if provided by us
+        labourItems: _isLabourProvidedByUs
+            ? List.from(_labourItems)
+            : [],
         billDate: _billDate,
         dueDate: _dueDate,
         paidDate: _paymentStatus == 'Paid' ? DateTime.now() : null,
@@ -464,13 +562,16 @@ class _CreateBillScreenState extends State<CreateBillScreen>
         termsAndConditions: _termsController.text.trim().isNotEmpty
             ? _termsController.text.trim()
             : null,
-        // Add a flag to indicate if labour was provided by us
         isLabourProvidedByUs: _isLabourProvidedByUs,
       );
 
+      // 1. Save the bill
       await _billsRef.child(billId).set(bill.toMap());
 
-      // If created from quotation, update quotation status to 'Billed'
+      // 2. Deduct qtyOnHand for each material item from inventory
+      await _deductItemQuantities(_materialItems);
+
+      // 3. If created from quotation, update quotation status to 'Billed'
       if (widget.quotation != null) {
         final DatabaseReference quotationsRef =
         FirebaseDatabase.instance.ref().child('quotations');
@@ -486,12 +587,54 @@ class _CreateBillScreenState extends State<CreateBillScreen>
       }
     } catch (e) {
       if (mounted) {
-        print((e));
+        print('Error creating bill: $e');
         _showErrorSnackBar('Failed to create bill: $e');
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
+  }
+
+  // Add this method to check stock before creating bill
+  Future<bool> _checkStockAvailability(List<QuotationItem> items) async {
+    List<String> insufficientStockItems = [];
+
+    for (final item in items) {
+      if (item.name.trim().isEmpty || item.quantity <= 0) continue;
+
+      final snapshot = await _itemsRef
+          .orderByChild('itemName')
+          .equalTo(item.name.trim())
+          .get();
+
+      if (!snapshot.exists || snapshot.value == null) {
+        // Item not found in inventory
+        insufficientStockItems.add('${item.name} (Item not found in inventory)');
+        continue;
+      }
+
+      final matchedItems = Map<String, dynamic>.from(snapshot.value as Map);
+
+      for (final entry in matchedItems.entries) {
+        final data = Map<String, dynamic>.from(entry.value as Map);
+        final double currentQty = (data['qtyOnHand'] ?? 0).toDouble();
+
+        if (currentQty < item.quantity) {
+          insufficientStockItems.add(
+              '${item.name} (Available: $currentQty, Required: ${item.quantity})'
+          );
+        }
+        break; // Only check the first match (assuming item names are unique)
+      }
+    }
+
+    if (insufficientStockItems.isNotEmpty) {
+      final message = 'Insufficient stock for:\n${insufficientStockItems.join('\n')}';
+      _showErrorSnackBar(message);
+      return false;
+    }
+
+    return true;
   }
 
   void _showSuccessSnackBar(String message) {
@@ -805,7 +948,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                       width: 24,
                       child: CircularProgressIndicator(
                         strokeWidth: 2.5,
-                        valueColor: AlwaysStoppedAnimation<Color>(
+                        valueColor:
+                        AlwaysStoppedAnimation<Color>(
                             _pearlWhite),
                       ),
                     )
@@ -919,7 +1063,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      widget.quotation!.customerEmail ?? 'No email provided',
+                      widget.quotation!.customerEmail ??
+                          'No email provided',
                       style: TextStyle(
                         color: _pearlWhite.withOpacity(0.7),
                         fontSize: 13,
@@ -1040,8 +1185,10 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                               DateTime? picked = await showDatePicker(
                                 context: context,
                                 initialDate: _billDate,
-                                firstDate: DateTime.now().subtract(const Duration(days: 365)),
-                                lastDate: DateTime.now().add(const Duration(days: 365)),
+                                firstDate: DateTime.now()
+                                    .subtract(const Duration(days: 365)),
+                                lastDate: DateTime.now()
+                                    .add(const Duration(days: 365)),
                                 builder: (context, child) {
                                   return Theme(
                                     data: ThemeData.dark().copyWith(
@@ -1069,7 +1216,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                 horizontal: 8,
                                 vertical: 4,
                               ),
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              tapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                             ),
                             child: const Text('Change'),
                           ),
@@ -1127,7 +1275,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                 context: context,
                                 initialDate: _dueDate,
                                 firstDate: DateTime.now(),
-                                lastDate: DateTime.now().add(const Duration(days: 365)),
+                                lastDate: DateTime.now()
+                                    .add(const Duration(days: 365)),
                                 builder: (context, child) {
                                   return Theme(
                                     data: ThemeData.dark().copyWith(
@@ -1155,7 +1304,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                 horizontal: 8,
                                 vertical: 4,
                               ),
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              tapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                             ),
                             child: const Text('Change'),
                           ),
@@ -1302,13 +1452,54 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                   ),
                   child: Row(
                     children: [
-                      Expanded(flex: 3, child: Text('Item', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600))),
-                      Expanded(flex: 1, child: Text('Qty', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.center)),
-                      Expanded(flex: 2, child: Text('Rate', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.right)),
-                      Expanded(flex: 2, child: Text('Disc', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.right)),
-                      Expanded(flex: 2, child: Text('Disc Type', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.center)),
-                      Expanded(flex: 2, child: Text('Tax %', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.right)),
-                      Expanded(flex: 2, child: Text('Total', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.right)),
+                      Expanded(
+                          flex: 3,
+                          child: Text('Item',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600))),
+                      Expanded(
+                          flex: 1,
+                          child: Text('Qty',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.center)),
+                      Expanded(
+                          flex: 2,
+                          child: Text('Rate',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.right)),
+                      Expanded(
+                          flex: 2,
+                          child: Text('Disc',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.right)),
+                      Expanded(
+                          flex: 2,
+                          child: Text('Disc Type',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.center)),
+                      Expanded(
+                          flex: 2,
+                          child: Text('Tax %',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.right)),
+                      Expanded(
+                          flex: 2,
+                          child: Text('Total',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.right)),
                       const SizedBox(width: 40),
                     ],
                   ),
@@ -1357,7 +1548,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     ),
                     border: InputBorder.none,
                     isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                    contentPadding:
+                    const EdgeInsets.symmetric(vertical: 4),
                   ),
                   onChanged: (value) {
                     _updateMaterialItem(index, name: value);
@@ -1387,25 +1579,87 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               ],
             ),
           ),
-          // Quantity
+          // Quantity with increment/decrement buttons
           Expanded(
             flex: 1,
-            child: TextFormField(
-              initialValue: item.quantity.toString(),
-              style: const TextStyle(color: _pearlWhite, fontSize: 14),
-              textAlign: TextAlign.center,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+            child: Container(
+              decoration: BoxDecoration(
+                color: _slateGray,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _deepPurple.withOpacity(0.3),
+                ),
               ),
-              onChanged: (value) {
-                double? qty = double.tryParse(value);
-                if (qty != null && qty > 0) {
-                  _updateMaterialItem(index, quantity: qty);
-                }
-              },
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: () {
+                      double newQty = item.quantity - 1;
+                      if (newQty >= 0.01) {
+                        _updateMaterialItem(index, quantity: newQty);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: _deepPurple.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Icon(
+                        Icons.remove_rounded,
+                        size: 16,
+                        color: item.quantity > 0.01
+                            ? _pearlWhite
+                            : _pearlWhite.withOpacity(0.3),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: item.quantity.toString(),
+                      style: const TextStyle(
+                        color: _pearlWhite,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      textAlign: TextAlign.center,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding:
+                        EdgeInsets.symmetric(vertical: 4),
+                      ),
+                      onChanged: (value) {
+                        double? qty = double.tryParse(value);
+                        if (qty != null && qty > 0) {
+                          _updateMaterialItem(index, quantity: qty);
+                        } else if (value.isEmpty) {
+                          _updateMaterialItem(index, quantity: 1);
+                        }
+                      },
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () {
+                      double newQty = item.quantity + 1;
+                      _updateMaterialItem(index, quantity: newQty);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: _deepPurple.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Icon(
+                        Icons.add_rounded,
+                        size: 16,
+                        color: _pearlWhite,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           // Rate
@@ -1417,14 +1671,15 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               textAlign: TextAlign.right,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
-                prefixText: '\$ ',
+                prefixText: ' ',
                 prefixStyle: TextStyle(
                   color: _pearlWhite.withOpacity(0.5),
                   fontSize: 14,
                 ),
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                contentPadding:
+                const EdgeInsets.symmetric(vertical: 4),
               ),
               onChanged: (value) {
                 double? rate = double.tryParse(value);
@@ -1444,14 +1699,17 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               textAlign: TextAlign.right,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
-                suffixText: item.discountType == DiscountType.percentage ? '%' : '\$',
+                suffixText: item.discountType == DiscountType.percentage
+                    ? '%'
+                    : '',
                 suffixStyle: TextStyle(
                   color: _pearlWhite.withOpacity(0.5),
                   fontSize: 14,
                 ),
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                contentPadding:
+                const EdgeInsets.symmetric(vertical: 4),
               ),
               onChanged: (value) {
                 double? discount = double.tryParse(value);
@@ -1473,17 +1731,22 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     onTap: () => _updateMaterialItem(index,
                         discountType: DiscountType.percentage),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: item.discountType == DiscountType.percentage
                             ? _amberGlow.withOpacity(0.15)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: item.discountType == DiscountType.percentage
+                          color:
+                          item.discountType == DiscountType.percentage
                               ? _amberGlow
                               : Colors.white.withOpacity(0.1),
-                          width: item.discountType == DiscountType.percentage ? 1.5 : 1,
+                          width:
+                          item.discountType == DiscountType.percentage
+                              ? 1.5
+                              : 1,
                         ),
                       ),
                       child: Row(
@@ -1494,13 +1757,15 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: item.discountType == DiscountType.percentage
+                                color: item.discountType ==
+                                    DiscountType.percentage
                                     ? _amberGlow
                                     : _pearlWhite.withOpacity(0.5),
                                 width: 2,
                               ),
                             ),
-                            child: item.discountType == DiscountType.percentage
+                            child: item.discountType ==
+                                DiscountType.percentage
                                 ? Center(
                               child: Container(
                                 width: 8,
@@ -1528,7 +1793,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     onTap: () => _updateMaterialItem(index,
                         discountType: DiscountType.amount),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: item.discountType == DiscountType.amount
                             ? _emeraldGreen.withOpacity(0.15)
@@ -1538,7 +1804,9 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                           color: item.discountType == DiscountType.amount
                               ? _emeraldGreen
                               : Colors.white.withOpacity(0.1),
-                          width: item.discountType == DiscountType.amount ? 1.5 : 1,
+                          width: item.discountType == DiscountType.amount
+                              ? 1.5
+                              : 1,
                         ),
                       ),
                       child: Row(
@@ -1549,7 +1817,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: item.discountType == DiscountType.amount
+                                color:
+                                item.discountType == DiscountType.amount
                                     ? _emeraldGreen
                                     : _pearlWhite.withOpacity(0.5),
                                 width: 2,
@@ -1598,7 +1867,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                 ),
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                contentPadding:
+                const EdgeInsets.symmetric(vertical: 4),
               ),
               onChanged: (value) {
                 double? tax = double.tryParse(value);
@@ -1614,7 +1884,7 @@ class _CreateBillScreenState extends State<CreateBillScreen>
             child: Container(
               alignment: Alignment.centerRight,
               child: Text(
-                '\$${item.total.toStringAsFixed(2)}',
+                item.total.toStringAsFixed(2),
                 style: const TextStyle(
                   color: _pearlWhite,
                   fontSize: 14,
@@ -1698,7 +1968,6 @@ class _CreateBillScreenState extends State<CreateBillScreen>
             ),
             child: Column(
               children: [
-                // Checkbox for labour provided by us
                 InkWell(
                   onTap: () {
                     setState(() {
@@ -1783,12 +2052,9 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     ),
                   ),
                 ),
-
                 const SizedBox(height: 12),
                 const Divider(color: Colors.white24, height: 1),
                 const SizedBox(height: 12),
-
-                // Alternative option - customer provides labour
                 InkWell(
                   onTap: () {
                     setState(() {
@@ -1999,7 +2265,6 @@ class _CreateBillScreenState extends State<CreateBillScreen>
             ),
             child: Column(
               children: [
-                // Table Header
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -2011,17 +2276,51 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                   ),
                   child: Row(
                     children: [
-                      Expanded(flex: 3, child: Text('Labour', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600))),
-                      Expanded(flex: 1, child: Text('Hours', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.center)),
-                      Expanded(flex: 2, child: Text('Rate/hr', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.right)),
-                      Expanded(flex: 2, child: Text('Disc', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.right)),
-                      Expanded(flex: 2, child: Text('Disc Type', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.center)),
-                      Expanded(flex: 2, child: Text('Total', style: TextStyle(color: _pearlWhite.withOpacity(0.8), fontWeight: FontWeight.w600), textAlign: TextAlign.right)),
+                      Expanded(
+                          flex: 3,
+                          child: Text('Labour',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600))),
+                      Expanded(
+                          flex: 1,
+                          child: Text('Hours',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.center)),
+                      Expanded(
+                          flex: 2,
+                          child: Text('Rate/hr',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.right)),
+                      Expanded(
+                          flex: 2,
+                          child: Text('Disc',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.right)),
+                      Expanded(
+                          flex: 2,
+                          child: Text('Disc Type',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.center)),
+                      Expanded(
+                          flex: 2,
+                          child: Text('Total',
+                              style: TextStyle(
+                                  color: _pearlWhite.withOpacity(0.8),
+                                  fontWeight: FontWeight.w600),
+                              textAlign: TextAlign.right)),
                       const SizedBox(width: 40),
                     ],
                   ),
                 ),
-                // Items List
                 ListView.separated(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
@@ -2048,7 +2347,6 @@ class _CreateBillScreenState extends State<CreateBillScreen>
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Labour Name & Description
           Expanded(
             flex: 3,
             child: Column(
@@ -2065,7 +2363,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     ),
                     border: InputBorder.none,
                     isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                    contentPadding:
+                    const EdgeInsets.symmetric(vertical: 4),
                   ),
                   onChanged: (value) {
                     _updateLabourItem(index, name: value);
@@ -2095,28 +2394,88 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               ],
             ),
           ),
-          // Hours
           Expanded(
             flex: 1,
-            child: TextFormField(
-              initialValue: item.hours.toString(),
-              style: const TextStyle(color: _pearlWhite, fontSize: 14),
-              textAlign: TextAlign.center,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+            child: Container(
+              decoration: BoxDecoration(
+                color: _slateGray,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _amberGlow.withOpacity(0.3),
+                ),
               ),
-              onChanged: (value) {
-                double? hours = double.tryParse(value);
-                if (hours != null && hours > 0) {
-                  _updateLabourItem(index, hours: hours);
-                }
-              },
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: () {
+                      double newHours = item.hours - 0.5;
+                      if (newHours >= 0.5) {
+                        _updateLabourItem(index, hours: newHours);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: _amberGlow.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Icon(
+                        Icons.remove_rounded,
+                        size: 16,
+                        color: item.hours > 0.5
+                            ? _pearlWhite
+                            : _pearlWhite.withOpacity(0.3),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: item.hours.toString(),
+                      style: const TextStyle(
+                        color: _pearlWhite,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      textAlign: TextAlign.center,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding:
+                        EdgeInsets.symmetric(vertical: 4),
+                      ),
+                      onChanged: (value) {
+                        double? hours = double.tryParse(value);
+                        if (hours != null && hours > 0) {
+                          _updateLabourItem(index, hours: hours);
+                        } else if (value.isEmpty) {
+                          _updateLabourItem(index, hours: 1);
+                        }
+                      },
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () {
+                      double newHours = item.hours + 0.5;
+                      _updateLabourItem(index, hours: newHours);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: _amberGlow.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Icon(
+                        Icons.add_rounded,
+                        size: 16,
+                        color: _pearlWhite,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          // Rate per hour
           Expanded(
             flex: 2,
             child: TextFormField(
@@ -2125,14 +2484,15 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               textAlign: TextAlign.right,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
-                prefixText: '\$ ',
+                prefixText: ' ',
                 prefixStyle: TextStyle(
                   color: _pearlWhite.withOpacity(0.5),
                   fontSize: 14,
                 ),
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                contentPadding:
+                const EdgeInsets.symmetric(vertical: 4),
               ),
               onChanged: (value) {
                 double? rate = double.tryParse(value);
@@ -2142,7 +2502,6 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               },
             ),
           ),
-          // Discount Value
           Expanded(
             flex: 2,
             child: TextFormField(
@@ -2152,14 +2511,17 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               textAlign: TextAlign.right,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
-                suffixText: item.discountType == DiscountType.percentage ? '%' : '\$',
+                suffixText: item.discountType == DiscountType.percentage
+                    ? '%'
+                    : '',
                 suffixStyle: TextStyle(
                   color: _pearlWhite.withOpacity(0.5),
                   fontSize: 14,
                 ),
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                contentPadding:
+                const EdgeInsets.symmetric(vertical: 4),
               ),
               onChanged: (value) {
                 double? discount = double.tryParse(value);
@@ -2169,7 +2531,6 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               },
             ),
           ),
-          // Discount Type Radio Buttons
           Expanded(
             flex: 2,
             child: Container(
@@ -2181,17 +2542,22 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     onTap: () => _updateLabourItem(index,
                         discountType: DiscountType.percentage),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: item.discountType == DiscountType.percentage
                             ? _amberGlow.withOpacity(0.15)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: item.discountType == DiscountType.percentage
+                          color:
+                          item.discountType == DiscountType.percentage
                               ? _amberGlow
                               : Colors.white.withOpacity(0.1),
-                          width: item.discountType == DiscountType.percentage ? 1.5 : 1,
+                          width:
+                          item.discountType == DiscountType.percentage
+                              ? 1.5
+                              : 1,
                         ),
                       ),
                       child: Row(
@@ -2202,13 +2568,15 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: item.discountType == DiscountType.percentage
+                                color: item.discountType ==
+                                    DiscountType.percentage
                                     ? _amberGlow
                                     : _pearlWhite.withOpacity(0.5),
                                 width: 2,
                               ),
                             ),
-                            child: item.discountType == DiscountType.percentage
+                            child: item.discountType ==
+                                DiscountType.percentage
                                 ? Center(
                               child: Container(
                                 width: 8,
@@ -2222,11 +2590,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                 : null,
                           ),
                           const SizedBox(width: 4),
-                          const Icon(
-                            Icons.percent_rounded,
-                            size: 14,
-                            color: _amberGlow,
-                          ),
+                          const Icon(Icons.percent_rounded,
+                              size: 14, color: _amberGlow),
                         ],
                       ),
                     ),
@@ -2236,7 +2601,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     onTap: () => _updateLabourItem(index,
                         discountType: DiscountType.amount),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: item.discountType == DiscountType.amount
                             ? _emeraldGreen.withOpacity(0.15)
@@ -2246,7 +2612,9 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                           color: item.discountType == DiscountType.amount
                               ? _emeraldGreen
                               : Colors.white.withOpacity(0.1),
-                          width: item.discountType == DiscountType.amount ? 1.5 : 1,
+                          width: item.discountType == DiscountType.amount
+                              ? 1.5
+                              : 1,
                         ),
                       ),
                       child: Row(
@@ -2257,7 +2625,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               border: Border.all(
-                                color: item.discountType == DiscountType.amount
+                                color:
+                                item.discountType == DiscountType.amount
                                     ? _emeraldGreen
                                     : _pearlWhite.withOpacity(0.5),
                                 width: 2,
@@ -2277,11 +2646,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                 : null,
                           ),
                           const SizedBox(width: 4),
-                          const Icon(
-                            Icons.attach_money_rounded,
-                            size: 14,
-                            color: _emeraldGreen,
-                          ),
+                          const Icon(Icons.attach_money_rounded,
+                              size: 14, color: _emeraldGreen),
                         ],
                       ),
                     ),
@@ -2290,13 +2656,12 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               ),
             ),
           ),
-          // Total
           Expanded(
             flex: 2,
             child: Container(
               alignment: Alignment.centerRight,
               child: Text(
-                '\$${item.total.toStringAsFixed(2)}',
+                item.total.toStringAsFixed(2),
                 style: const TextStyle(
                   color: _pearlWhite,
                   fontSize: 14,
@@ -2305,7 +2670,6 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               ),
             ),
           ),
-          // Delete Button
           SizedBox(
             width: 40,
             child: IconButton(
@@ -2343,7 +2707,6 @@ class _CreateBillScreenState extends State<CreateBillScreen>
       ),
       child: Column(
         children: [
-          // Material Summary
           Container(
             padding: const EdgeInsets.only(bottom: 12),
             child: Row(
@@ -2372,22 +2735,23 @@ class _CreateBillScreenState extends State<CreateBillScreen>
               ],
             ),
           ),
-          _buildSummaryRow('Subtotal', '\$${_materialSubtotal.toStringAsFixed(2)}'),
+          _buildSummaryRow(
+              'Subtotal', _materialSubtotal.toStringAsFixed(2)),
           const SizedBox(height: 4),
-          _buildSummaryRow('Discount', '-\$${_materialDiscountTotal.toStringAsFixed(2)}',
+          _buildSummaryRow(
+              'Discount', '-${_materialDiscountTotal.toStringAsFixed(2)}',
               color: _crimsonRed),
           const SizedBox(height: 4),
-          _buildSummaryRow('Tax', '+\$${_materialTaxTotal.toStringAsFixed(2)}',
+          _buildSummaryRow(
+              'Tax', '+${_materialTaxTotal.toStringAsFixed(2)}',
               color: _emeraldGreen),
           const SizedBox(height: 8),
-          _buildSummaryRow('Material Total', '\$${_materialTotal.toStringAsFixed(2)}',
+          _buildSummaryRow(
+              'Material Total', _materialTotal.toStringAsFixed(2),
               isBold: true, color: _deepPurple),
 
-          // Only show Labour summary if labour is provided by us
           if (_isLabourProvidedByUs) ...[
             const Divider(color: Colors.white24, height: 24),
-
-            // Labour Summary
             Container(
               padding: const EdgeInsets.only(bottom: 12),
               child: Row(
@@ -2416,12 +2780,15 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                 ],
               ),
             ),
-            _buildSummaryRow('Subtotal', '\$${_labourSubtotal.toStringAsFixed(2)}'),
+            _buildSummaryRow(
+                'Subtotal', _labourSubtotal.toStringAsFixed(2)),
             const SizedBox(height: 4),
-            _buildSummaryRow('Discount', '-\$${_labourDiscountTotal.toStringAsFixed(2)}',
+            _buildSummaryRow(
+                'Discount', '-${_labourDiscountTotal.toStringAsFixed(2)}',
                 color: _crimsonRed),
             const SizedBox(height: 8),
-            _buildSummaryRow('Labour Total', '\$${_labourTotal.toStringAsFixed(2)}',
+            _buildSummaryRow(
+                'Labour Total', _labourTotal.toStringAsFixed(2),
                 isBold: true, color: _amberGlow),
           ],
 
@@ -2456,22 +2823,29 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                 value: _grandDiscountValue,
                               ),
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 6),
                                 margin: const EdgeInsets.only(right: 4),
                                 decoration: BoxDecoration(
-                                  color: _grandDiscountType == DiscountType.percentage
+                                  color: _grandDiscountType ==
+                                      DiscountType.percentage
                                       ? _amberGlow.withOpacity(0.15)
                                       : Colors.transparent,
                                   borderRadius: BorderRadius.circular(16),
                                   border: Border.all(
-                                    color: _grandDiscountType == DiscountType.percentage
+                                    color: _grandDiscountType ==
+                                        DiscountType.percentage
                                         ? _amberGlow
                                         : Colors.white.withOpacity(0.1),
-                                    width: _grandDiscountType == DiscountType.percentage ? 1.5 : 1,
+                                    width: _grandDiscountType ==
+                                        DiscountType.percentage
+                                        ? 1.5
+                                        : 1,
                                   ),
                                 ),
                                 child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  mainAxisAlignment:
+                                  MainAxisAlignment.center,
                                   children: [
                                     Container(
                                       width: 14,
@@ -2479,18 +2853,21 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                       decoration: BoxDecoration(
                                         shape: BoxShape.circle,
                                         border: Border.all(
-                                          color: _grandDiscountType == DiscountType.percentage
+                                          color: _grandDiscountType ==
+                                              DiscountType.percentage
                                               ? _amberGlow
                                               : _pearlWhite.withOpacity(0.5),
                                           width: 2,
                                         ),
                                       ),
-                                      child: _grandDiscountType == DiscountType.percentage
+                                      child: _grandDiscountType ==
+                                          DiscountType.percentage
                                           ? Center(
                                         child: Container(
                                           width: 6,
                                           height: 6,
-                                          decoration: const BoxDecoration(
+                                          decoration:
+                                          const BoxDecoration(
                                             shape: BoxShape.circle,
                                             color: _amberGlow,
                                           ),
@@ -2499,20 +2876,14 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                           : null,
                                     ),
                                     const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.percent_rounded,
-                                      size: 12,
-                                      color: _amberGlow,
-                                    ),
+                                    const Icon(Icons.percent_rounded,
+                                        size: 12, color: _amberGlow),
                                     const SizedBox(width: 2),
-                                    const Text(
-                                      '%',
-                                      style: TextStyle(
-                                        color: _amberGlow,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
+                                    const Text('%',
+                                        style: TextStyle(
+                                            color: _amberGlow,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w600)),
                                   ],
                                 ),
                               ),
@@ -2526,21 +2897,28 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                 value: _grandDiscountValue,
                               ),
                               child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 6),
                                 decoration: BoxDecoration(
-                                  color: _grandDiscountType == DiscountType.amount
+                                  color: _grandDiscountType ==
+                                      DiscountType.amount
                                       ? _emeraldGreen.withOpacity(0.15)
                                       : Colors.transparent,
                                   borderRadius: BorderRadius.circular(16),
                                   border: Border.all(
-                                    color: _grandDiscountType == DiscountType.amount
+                                    color: _grandDiscountType ==
+                                        DiscountType.amount
                                         ? _emeraldGreen
                                         : Colors.white.withOpacity(0.1),
-                                    width: _grandDiscountType == DiscountType.amount ? 1.5 : 1,
+                                    width: _grandDiscountType ==
+                                        DiscountType.amount
+                                        ? 1.5
+                                        : 1,
                                   ),
                                 ),
                                 child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  mainAxisAlignment:
+                                  MainAxisAlignment.center,
                                   children: [
                                     Container(
                                       width: 14,
@@ -2548,18 +2926,21 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                       decoration: BoxDecoration(
                                         shape: BoxShape.circle,
                                         border: Border.all(
-                                          color: _grandDiscountType == DiscountType.amount
+                                          color: _grandDiscountType ==
+                                              DiscountType.amount
                                               ? _emeraldGreen
                                               : _pearlWhite.withOpacity(0.5),
                                           width: 2,
                                         ),
                                       ),
-                                      child: _grandDiscountType == DiscountType.amount
+                                      child: _grandDiscountType ==
+                                          DiscountType.amount
                                           ? Center(
                                         child: Container(
                                           width: 6,
                                           height: 6,
-                                          decoration: const BoxDecoration(
+                                          decoration:
+                                          const BoxDecoration(
                                             shape: BoxShape.circle,
                                             color: _emeraldGreen,
                                           ),
@@ -2568,20 +2949,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                                           : null,
                                     ),
                                     const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.attach_money_rounded,
-                                      size: 12,
-                                      color: _emeraldGreen,
-                                    ),
-                                    const SizedBox(width: 2),
-                                    const Text(
-                                      '\$',
-                                      style: TextStyle(
-                                        color: _emeraldGreen,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
+                                    const Icon(Icons.attach_money_rounded,
+                                        size: 12, color: _emeraldGreen),
                                   ],
                                 ),
                               ),
@@ -2596,19 +2965,26 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                         margin: const EdgeInsets.only(left: 8),
                         child: TextFormField(
                           initialValue: _grandDiscountValue.toStringAsFixed(
-                              _grandDiscountType == DiscountType.percentage ? 1 : 2),
-                          style: const TextStyle(color: _pearlWhite, fontSize: 14),
+                              _grandDiscountType == DiscountType.percentage
+                                  ? 1
+                                  : 2),
+                          style: const TextStyle(
+                              color: _pearlWhite, fontSize: 14),
                           textAlign: TextAlign.right,
                           keyboardType: TextInputType.number,
                           decoration: InputDecoration(
-                            suffixText: _grandDiscountType == DiscountType.percentage ? '%' : '\$',
+                            suffixText: _grandDiscountType ==
+                                DiscountType.percentage
+                                ? '%'
+                                : '',
                             suffixStyle: TextStyle(
                               color: _pearlWhite.withOpacity(0.5),
                               fontSize: 14,
                             ),
                             border: InputBorder.none,
                             isDense: true,
-                            contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                            contentPadding:
+                            const EdgeInsets.symmetric(vertical: 4),
                           ),
                           onChanged: (value) {
                             double? discount = double.tryParse(value);
@@ -2630,15 +3006,13 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
+                          horizontal: 12, vertical: 4),
                       decoration: BoxDecoration(
                         color: _crimsonRed.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        'Discount: -\$${_grandDiscountAmount.toStringAsFixed(2)}',
+                        'Discount: -${_grandDiscountAmount.toStringAsFixed(2)}',
                         style: const TextStyle(
                           color: _crimsonRed,
                           fontSize: 12,
@@ -2653,13 +3027,14 @@ class _CreateBillScreenState extends State<CreateBillScreen>
           ),
 
           const SizedBox(height: 8),
-          _buildSummaryRow('Subtotal', '\$${beforeGrandDiscount.toStringAsFixed(2)}'),
+          _buildSummaryRow(
+              'Subtotal', beforeGrandDiscount.toStringAsFixed(2)),
           const SizedBox(height: 8),
-          _buildSummaryRow('Grand Discount', '-\$${_grandDiscountAmount.toStringAsFixed(2)}',
+          _buildSummaryRow('Grand Discount',
+              '-${_grandDiscountAmount.toStringAsFixed(2)}',
               color: _crimsonRed),
           const Divider(color: Colors.white24, height: 20),
 
-          // Grand Total
           Container(
             padding: const EdgeInsets.only(top: 8),
             child: Row(
@@ -2675,9 +3050,7 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
+                      horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
                       colors: [_deepPurple, _electricIndigo],
@@ -2687,7 +3060,7 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    '\$${_grandTotal.toStringAsFixed(2)}',
+                    _grandTotal.toStringAsFixed(2),
                     style: const TextStyle(
                       color: _pearlWhite,
                       fontSize: 20,
@@ -2773,11 +3146,14 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                       ),
                       child: TextFormField(
                         controller: _amountPaidController,
-                        style: const TextStyle(color: _pearlWhite, fontSize: 16, fontWeight: FontWeight.w600),
+                        style: const TextStyle(
+                            color: _pearlWhite,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600),
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
-                          prefixText: '\$ ',
-                          prefixStyle: TextStyle(
+                          prefixText: ' ',
+                          prefixStyle: const TextStyle(
                             color: _emeraldGreen,
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
@@ -2812,7 +3188,8 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                     ),
                     const SizedBox(height: 4),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      padding:
+                      const EdgeInsets.symmetric(horizontal: 12),
                       decoration: BoxDecoration(
                         color: _slateGray,
                         borderRadius: BorderRadius.circular(12),
@@ -2901,7 +3278,7 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                           ),
                         ),
                         Text(
-                          '\$${_balanceDue.toStringAsFixed(2)}',
+                          _balanceDue.toStringAsFixed(2),
                           style: TextStyle(
                             color: _balanceDue <= 0
                                 ? _emeraldGreen
@@ -2916,9 +3293,7 @@ class _CreateBillScreenState extends State<CreateBillScreen>
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 8,
-                  ),
+                      horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
                     color: _paymentStatus == 'Paid'
                         ? _emeraldGreen.withOpacity(0.1)

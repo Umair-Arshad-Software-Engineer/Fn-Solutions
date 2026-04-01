@@ -6,6 +6,7 @@ import '../Models/bill_model.dart';
 import '../Models/labour_model.dart';
 import '../Models/quotation_model.dart';
 import 'PayBillScreen.dart';
+import 'ReturnItemsScreen.dart';
 
 class BillDetailsScreen extends StatefulWidget {
   final BillModel bill;
@@ -189,42 +190,132 @@ class _BillDetailsScreenState extends State<BillDetailsScreen>
             ),
           ],
         ),
+        // actions: [
+        //   Container(
+        //     margin: const EdgeInsets.only(right: 16),
+        //     padding: const EdgeInsets.symmetric(
+        //       horizontal: 12,
+        //       vertical: 6,
+        //     ),
+        //     decoration: BoxDecoration(
+        //       color: statusColor.withOpacity(0.1),
+        //       borderRadius: BorderRadius.circular(20),
+        //       border: Border.all(
+        //         color: statusColor.withOpacity(0.3),
+        //       ),
+        //     ),
+        //     child: Row(
+        //       children: [
+        //         Container(
+        //           width: 8,
+        //           height: 8,
+        //           decoration: BoxDecoration(
+        //             color: statusColor,
+        //             shape: BoxShape.circle,
+        //           ),
+        //         ),
+        //         const SizedBox(width: 6),
+        //         Text(
+        //           displayStatus,
+        //           style: TextStyle(
+        //             color: statusColor,
+        //             fontSize: 12,
+        //             fontWeight: FontWeight.w600,
+        //           ),
+        //         ),
+        //       ],
+        //     ),
+        //   ),
+        //   if (_bill.paymentStatus != 'Paid' && _bill.balanceDue > 0)
+        //     Container(
+        //       margin: const EdgeInsets.only(right: 16),
+        //       child: ElevatedButton.icon(
+        //         onPressed: _processPayment,
+        //         icon: const Icon(Icons.payment_rounded, size: 18),
+        //         label: const Text('Pay Now'),
+        //         style: ElevatedButton.styleFrom(
+        //           backgroundColor: _emeraldGreen,
+        //           foregroundColor: _pearlWhite,
+        //           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        //           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        //         ),
+        //       ),
+        //     ),
+        // ],
+        // In BillDetailsScreen.dart, add this to the AppBar actions
         actions: [
+          // Existing status container
           Container(
-            margin: const EdgeInsets.only(right: 16),
-            padding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 6,
-            ),
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
               color: statusColor.withOpacity(0.1),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: statusColor.withOpacity(0.3),
-              ),
+              border: Border.all(color: statusColor.withOpacity(0.3)),
             ),
             child: Row(
               children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: statusColor,
-                    shape: BoxShape.circle,
-                  ),
-                ),
+                Container(width: 8, height: 8, decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle)),
                 const SizedBox(width: 6),
-                Text(
-                  displayStatus,
-                  style: TextStyle(
-                    color: statusColor,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                Text(displayStatus, style: TextStyle(color: statusColor, fontSize: 12, fontWeight: FontWeight.w600)),
               ],
             ),
           ),
+
+          // Add Return Button (only if bill has material items and not fully returned)
+          if (_bill.materialItems.isNotEmpty && _bill.paymentStatus != 'Paid' && _bill.balanceDue > 0)
+            Container(
+              margin: const EdgeInsets.only(right: 16),
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  final result = await Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ReturnItemsScreen(
+                        bill: _bill,
+                        teamId: widget.teamId,
+                        teamName: widget.teamName,
+                      ),
+                    ),
+                  );
+
+                  if (result == true) {
+                    // Refresh bill data
+                    setState(() => _isLoading = true);
+                    try {
+                      DatabaseReference billRef = FirebaseDatabase.instance.ref().child('bills').child(_bill.id);
+                      DatabaseEvent event = await billRef.once();
+                      if (event.snapshot.value != null) {
+                        Map<String, dynamic> billData = Map<String, dynamic>.from(
+                          event.snapshot.value as Map,
+                        );
+                        billData['id'] = _bill.id;
+                        setState(() {
+                          _bill = BillModel.fromMap(_bill.id, billData);
+                          _isLoading = false;
+                        });
+                      }
+                    } catch (e) {
+                      print(e);
+                      setState(() => _isLoading = false);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Error refreshing bill: $e'), backgroundColor: _crimsonRed),
+                      );
+                    }
+                  }
+                },
+                icon: const Icon(Icons.undo_rounded, size: 18),
+                label: const Text('Return Items'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _crimsonRed,
+                  foregroundColor: _pearlWhite,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                ),
+              ),
+            ),
+
+          // Existing payment button
           if (_bill.paymentStatus != 'Paid' && _bill.balanceDue > 0)
             Container(
               margin: const EdgeInsets.only(right: 16),

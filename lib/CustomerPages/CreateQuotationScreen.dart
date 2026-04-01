@@ -75,9 +75,21 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
     'Expired',
   ];
 
+
+  // Item search fields (add alongside existing state variables)
+  List<Map<String, dynamic>> _dbItems = [];
+  List<Map<String, dynamic>> _filteredDbItems = [];
+  bool _isLoadingDbItems = false;
+// Track which item row is showing suggestions
+  int? _activeSearchIndex;
+// Store a FocusNode + controller per row
+  final List<TextEditingController> _itemNameControllers = [];
+  final List<FocusNode> _itemNameFocusNodes = [];
+
   @override
   void initState() {
     super.initState();
+    _fetchDbItems();
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -112,8 +124,48 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
     _animationController.dispose();
     _notesController.dispose();
     _termsController.dispose();
+    for (var c in _itemNameControllers) c.dispose();
+    for (var f in _itemNameFocusNodes) f.dispose();
     super.dispose();
   }
+
+  Future<void> _fetchDbItems() async {
+    setState(() => _isLoadingDbItems = true);
+    try {
+      final snapshot =
+      await FirebaseDatabase.instance.ref().child('items').get();
+      if (snapshot.exists) {
+        final data = snapshot.value as Map<dynamic, dynamic>;
+        setState(() {
+          _dbItems = data.entries.map((e) {
+            final v = Map<String, dynamic>.from(e.value as Map);
+            return {
+              'id': e.key,
+              'name': v['itemName'] ?? '',
+              'salePrice': (v['salePrice'] ?? 0.0).toDouble(),
+            };
+          }).toList();
+          _filteredDbItems = List.from(_dbItems);
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching items: $e');
+    } finally {
+      setState(() => _isLoadingDbItems = false);
+    }
+  }
+
+  void _filterDbItems(String query) {
+    setState(() {
+      _filteredDbItems = query.isEmpty
+          ? List.from(_dbItems)
+          : _dbItems
+          .where((item) =>
+          item['name'].toLowerCase().contains(query.toLowerCase()))
+          .toList();
+    });
+  }
+
 
   Future<void> _loadCurrentUser() async {
     User? user = FirebaseAuth.instance.currentUser;
@@ -129,6 +181,11 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
   }
 
   void _addItem() {
+    final controller = TextEditingController();
+    final focusNode = FocusNode();
+    _itemNameControllers.add(controller);
+    _itemNameFocusNodes.add(focusNode);
+
     setState(() {
       _items.add(QuotationItem(
         id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -145,12 +202,19 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
     });
   }
 
+
   void _removeItem(int index) {
+    _itemNameControllers[index].dispose();
+    _itemNameFocusNodes[index].dispose();
+    _itemNameControllers.removeAt(index);
+    _itemNameFocusNodes.removeAt(index);
     setState(() {
       _items.removeAt(index);
+      if (_activeSearchIndex == index) _activeSearchIndex = null;
       _calculateTotals();
     });
   }
+
 
   void _updateItem(int index, {
     String? name,
@@ -1000,35 +1064,199 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
   }
 
   Widget _buildItemRow(int index, QuotationItem item) {
+    // Guard: ensure controllers list is in sync
+    while (_itemNameControllers.length <= index) {
+      _itemNameControllers.add(TextEditingController());
+      _itemNameFocusNodes.add(FocusNode());
+    }
+
+    final nameController = _itemNameControllers[index];
+    // Sync controller text without resetting cursor
+    if (nameController.text != item.name) {
+      nameController.value = nameController.value.copyWith(text: item.name);
+    }
+
+    final bool showSuggestions =
+        _activeSearchIndex == index && _filteredDbItems.isNotEmpty;
+
     return Container(
       padding: const EdgeInsets.all(16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Item Name & Description
+          // ── Item Name + suggestions ──────────────────────────────
           Expanded(
             flex: 3,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextFormField(
-                  initialValue: item.name,
-                  style: const TextStyle(color: _pearlWhite, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: 'Item name',
-                    hintStyle: TextStyle(
-                      color: _pearlWhite.withOpacity(0.3),
-                      fontSize: 14,
+                // Name field
+                Container(
+                  decoration: BoxDecoration(
+                    color: _slateGray.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: _activeSearchIndex == index
+                          ? _deepPurple.withOpacity(0.6)
+                          : Colors.white.withOpacity(0.08),
                     ),
-                    border: InputBorder.none,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 4),
                   ),
-                  onChanged: (value) {
-                    _updateItem(index, name: value);
-                  },
+                  child: TextFormField(
+                    controller: nameController,
+                    focusNode: _itemNameFocusNodes[index],
+                    style: const TextStyle(color: _pearlWhite, fontSize: 14),
+                    decoration: InputDecoration(
+                      hintText: 'Search item...',
+                      hintStyle: TextStyle(
+                        color: _pearlWhite.withOpacity(0.3),
+                        fontSize: 14,
+                      ),
+                      prefixIcon: Icon(
+                        Icons.search_rounded,
+                        size: 18,
+                        color: _pearlWhite.withOpacity(0.4),
+                      ),
+                      suffixIcon: _isLoadingDbItems
+                          ? Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: _deepPurple.withOpacity(0.7),
+                          ),
+                        ),
+                      )
+                          : nameController.text.isNotEmpty
+                          ? IconButton(
+                        icon: Icon(
+                          Icons.close_rounded,
+                          size: 16,
+                          color: _pearlWhite.withOpacity(0.4),
+                        ),
+                        onPressed: () {
+                          nameController.clear();
+                          _updateItem(index, name: '');
+                          setState(() => _activeSearchIndex = null);
+                        },
+                      )
+                          : null,
+                      border: InputBorder.none,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                    ),
+                    onTap: () {
+                      setState(() {
+                        _activeSearchIndex = index;
+                        _filterDbItems(nameController.text);
+                      });
+                    },
+                    onChanged: (value) {
+                      _updateItem(index, name: value);
+                      _filterDbItems(value);
+                      setState(() => _activeSearchIndex = index);
+                    },
+                  ),
                 ),
-                const SizedBox(height: 4),
+
+                // Suggestions dropdown
+                if (showSuggestions)
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 180),
+                    margin: const EdgeInsets.only(top: 4),
+                    decoration: BoxDecoration(
+                      color: _charcoalBlue,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _deepPurple.withOpacity(0.3),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.4),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      itemCount: _filteredDbItems.length,
+                      separatorBuilder: (_, __) => Divider(
+                        height: 1,
+                        color: Colors.white.withOpacity(0.06),
+                      ),
+                      itemBuilder: (context, i) {
+                        final dbItem = _filteredDbItems[i];
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(8),
+                          onTap: () {
+                            // Fill the row with selected item data
+                            nameController.text = dbItem['name'];
+                            _updateItem(
+                              index,
+                              name: dbItem['name'],
+                              rate: (dbItem['salePrice'] as double),
+                            );
+                            setState(() => _activeSearchIndex = null);
+                            _itemNameFocusNodes[index].unfocus();
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 10),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: _deepPurple.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(
+                                    Icons.inventory_2_rounded,
+                                    size: 14,
+                                    color: _deepPurple,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    dbItem['name'],
+                                    style: const TextStyle(
+                                      color: _pearlWhite,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: _emeraldGreen.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    '${(dbItem['salePrice'] as double).toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      color: _emeraldGreen,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+
+                // Description field
+                const SizedBox(height: 6),
                 TextFormField(
                   initialValue: item.description,
                   style: TextStyle(
@@ -1045,15 +1273,13 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                     isDense: true,
                     contentPadding: EdgeInsets.zero,
                   ),
-                  onChanged: (value) {
-                    _updateItem(index, description: value);
-                  },
+                  onChanged: (value) => _updateItem(index, description: value),
                 ),
               ],
             ),
           ),
 
-          // Quantity
+          // ── Quantity ─────────────────────────────────────────────
           Expanded(
             flex: 1,
             child: TextFormField(
@@ -1061,30 +1287,30 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
               style: const TextStyle(color: _pearlWhite, fontSize: 14),
               textAlign: TextAlign.center,
               keyboardType: TextInputType.number,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                contentPadding: EdgeInsets.symmetric(vertical: 4),
               ),
               onChanged: (value) {
-                double? qty = double.tryParse(value);
-                if (qty != null && qty > 0) {
-                  _updateItem(index, quantity: qty);
-                }
+                final qty = double.tryParse(value);
+                if (qty != null && qty > 0) _updateItem(index, quantity: qty);
               },
             ),
           ),
 
-          // Rate
+          // ── Rate ─────────────────────────────────────────────────
           Expanded(
             flex: 2,
             child: TextFormField(
+              // Use a key so Flutter rebuilds when rate is auto-filled
+              key: ValueKey('rate_${index}_${item.rate}'),
               initialValue: item.rate.toStringAsFixed(2),
               style: const TextStyle(color: _pearlWhite, fontSize: 14),
               textAlign: TextAlign.right,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
-                prefixText: '\$ ',
+                prefixText: ' ',
                 prefixStyle: TextStyle(
                   color: _pearlWhite.withOpacity(0.5),
                   fontSize: 14,
@@ -1094,24 +1320,24 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                 contentPadding: const EdgeInsets.symmetric(vertical: 4),
               ),
               onChanged: (value) {
-                double? rate = double.tryParse(value);
-                if (rate != null && rate > 0) {
-                  _updateItem(index, rate: rate);
-                }
+                final rate = double.tryParse(value);
+                if (rate != null && rate > 0) _updateItem(index, rate: rate);
               },
             ),
           ),
 
-          // Discount Value
+          // ── Discount Value ────────────────────────────────────────
           Expanded(
             flex: 2,
             child: TextFormField(
-              initialValue: item.discountValue.toStringAsFixed(item.discountType == DiscountType.percentage ? 1 : 2),
+              initialValue: item.discountValue.toStringAsFixed(
+                  item.discountType == DiscountType.percentage ? 1 : 2),
               style: const TextStyle(color: _pearlWhite, fontSize: 14),
               textAlign: TextAlign.right,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
-                suffixText: item.discountType == DiscountType.percentage ? '%' : '\$',
+                suffixText:
+                item.discountType == DiscountType.percentage ? '%' : '',
                 suffixStyle: TextStyle(
                   color: _pearlWhite.withOpacity(0.5),
                   fontSize: 14,
@@ -1121,7 +1347,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                 contentPadding: const EdgeInsets.symmetric(vertical: 4),
               ),
               onChanged: (value) {
-                double? discount = double.tryParse(value);
+                final discount = double.tryParse(value);
                 if (discount != null && discount >= 0) {
                   _updateItem(index, discountValue: discount);
                 }
@@ -1129,74 +1355,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
             ),
           ),
 
-          // Discount Type Toggle
-          // Expanded(
-          //   flex: 2,
-          //   child: Container(
-          //     margin: const EdgeInsets.only(right: 8),
-          //     padding: const EdgeInsets.symmetric(horizontal: 4),
-          //     decoration: BoxDecoration(
-          //       color: _slateGray,
-          //       borderRadius: BorderRadius.circular(8),
-          //       border: Border.all(
-          //         color: Colors.white.withOpacity(0.1),
-          //       ),
-          //     ),
-          //     child: DropdownButtonHideUnderline(
-          //       child: DropdownButton<DiscountType>(
-          //         value: item.discountType,
-          //         dropdownColor: _charcoalBlue,
-          //         icon: Icon(
-          //           Icons.keyboard_arrow_down_rounded,
-          //           color: _pearlWhite.withOpacity(0.7),
-          //           size: 20,
-          //         ),
-          //         style: const TextStyle(
-          //           color: _pearlWhite,
-          //           fontSize: 12,
-          //         ),
-          //         items: [
-          //           DropdownMenuItem(
-          //             value: DiscountType.percentage,
-          //             child: Row(
-          //               mainAxisAlignment: MainAxisAlignment.center,
-          //               children: [
-          //                 Icon(
-          //                   Icons.percent_rounded,
-          //                   size: 14,
-          //                   color: _amberGlow,
-          //                 ),
-          //                 const SizedBox(width: 4),
-          //                 const Text('%', style: TextStyle(fontSize: 12)),
-          //               ],
-          //             ),
-          //           ),
-          //           DropdownMenuItem(
-          //             value: DiscountType.amount,
-          //             child: Row(
-          //               mainAxisAlignment: MainAxisAlignment.center,
-          //               children: [
-          //                 Icon(
-          //                   Icons.attach_money_rounded,
-          //                   size: 14,
-          //                   color: _emeraldGreen,
-          //                 ),
-          //                 const SizedBox(width: 4),
-          //                 const Text('\$', style: TextStyle(fontSize: 12)),
-          //               ],
-          //             ),
-          //           ),
-          //         ],
-          //         onChanged: (value) {
-          //           if (value != null) {
-          //             _updateItem(index, discountType: value);
-          //           }
-          //         },
-          //       ),
-          //     ),
-          //   ),
-          // ),
-          // Discount Type Radio Buttons (replace the existing DropdownButton)
+          // ── Discount Type Radio ───────────────────────────────────
           Expanded(
             flex: 2,
             child: Container(
@@ -1204,11 +1363,12 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Percentage Radio
                   GestureDetector(
-                    onTap: () => _updateItem(index, discountType: DiscountType.percentage),
+                    onTap: () =>
+                        _updateItem(index, discountType: DiscountType.percentage),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: item.discountType == DiscountType.percentage
                             ? _amberGlow.withOpacity(0.15)
@@ -1218,7 +1378,8 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                           color: item.discountType == DiscountType.percentage
                               ? _amberGlow
                               : Colors.white.withOpacity(0.1),
-                          width: item.discountType == DiscountType.percentage ? 1.5 : 1,
+                          width:
+                          item.discountType == DiscountType.percentage ? 1.5 : 1,
                         ),
                       ),
                       child: Row(
@@ -1249,21 +1410,19 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                                 : null,
                           ),
                           const SizedBox(width: 4),
-                          const Icon(
-                            Icons.percent_rounded,
-                            size: 14,
-                            color: _amberGlow,
-                          ),
+                          const Icon(Icons.percent_rounded,
+                              size: 14, color: _amberGlow),
                         ],
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // Fixed Amount Radio
                   GestureDetector(
-                    onTap: () => _updateItem(index, discountType: DiscountType.amount),
+                    onTap: () =>
+                        _updateItem(index, discountType: DiscountType.amount),
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
                         color: item.discountType == DiscountType.amount
                             ? _emeraldGreen.withOpacity(0.15)
@@ -1273,7 +1432,8 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                           color: item.discountType == DiscountType.amount
                               ? _emeraldGreen
                               : Colors.white.withOpacity(0.1),
-                          width: item.discountType == DiscountType.amount ? 1.5 : 1,
+                          width:
+                          item.discountType == DiscountType.amount ? 1.5 : 1,
                         ),
                       ),
                       child: Row(
@@ -1304,11 +1464,8 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                                 : null,
                           ),
                           const SizedBox(width: 4),
-                          const Icon(
-                            Icons.attach_money_rounded,
-                            size: 14,
-                            color: _emeraldGreen,
-                          ),
+                          const Icon(Icons.attach_money_rounded,
+                              size: 14, color: _emeraldGreen),
                         ],
                       ),
                     ),
@@ -1318,7 +1475,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
             ),
           ),
 
-          // Tax %
+          // ── Tax % ─────────────────────────────────────────────────
           Expanded(
             flex: 2,
             child: TextFormField(
@@ -1337,21 +1494,19 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                 contentPadding: const EdgeInsets.symmetric(vertical: 4),
               ),
               onChanged: (value) {
-                double? tax = double.tryParse(value);
-                if (tax != null && tax >= 0) {
-                  _updateItem(index, taxPercent: tax);
-                }
+                final tax = double.tryParse(value);
+                if (tax != null && tax >= 0) _updateItem(index, taxPercent: tax);
               },
             ),
           ),
 
-          // Total
+          // ── Total ─────────────────────────────────────────────────
           Expanded(
             flex: 2,
             child: Container(
               alignment: Alignment.centerRight,
               child: Text(
-                '\$${item.total.toStringAsFixed(2)}',
+                '${item.total.toStringAsFixed(2)}',
                 style: const TextStyle(
                   color: _pearlWhite,
                   fontSize: 14,
@@ -1361,7 +1516,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
             ),
           ),
 
-          // Delete Button
+          // ── Delete ────────────────────────────────────────────────
           SizedBox(
             width: 40,
             child: IconButton(
@@ -1400,13 +1555,13 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
       child: Column(
         children: [
           // Summary Rows
-          _buildSummaryRow('Subtotal', '\$${_subtotal.toStringAsFixed(2)}'),
+          _buildSummaryRow('Subtotal', '${_subtotal.toStringAsFixed(2)}'),
           const SizedBox(height: 8),
-          _buildSummaryRow('Item Discount', '-\$${_itemDiscountTotal.toStringAsFixed(2)}',
+          _buildSummaryRow('Item Discount', '-${_itemDiscountTotal.toStringAsFixed(2)}',
               color: _crimsonRed),
           const SizedBox(height: 8),
           _buildSummaryRow('Subtotal after discount',
-              '\$${afterItemDiscount.toStringAsFixed(2)}',
+              '${afterItemDiscount.toStringAsFixed(2)}',
               isBold: true),
           const Divider(color: Colors.white24, height: 20),
 
@@ -1507,7 +1662,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
           //                 textAlign: TextAlign.right,
           //                 keyboardType: TextInputType.number,
           //                 decoration: InputDecoration(
-          //                   suffixText: _grandDiscountType == DiscountType.percentage ? '%' : '\$',
+          //                   suffixText: _grandDiscountType == DiscountType.percentage ? '%' : '',
           //                   suffixStyle: TextStyle(
           //                     color: _pearlWhite.withOpacity(0.5),
           //                     fontSize: 14,
@@ -1544,7 +1699,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
           //               borderRadius: BorderRadius.circular(20),
           //             ),
           //             child: Text(
-          //               'Discount: -\$${_grandDiscountAmount.toStringAsFixed(2)}',
+          //               'Discount: -${_grandDiscountAmount.toStringAsFixed(2)}',
           //               style: const TextStyle(
           //                 color: _crimsonRed,
           //                 fontSize: 12,
@@ -1708,7 +1863,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                                     ),
                                     const SizedBox(width: 2),
                                     const Text(
-                                      '\$',
+                                      '',
                                       style: TextStyle(
                                         color: _emeraldGreen,
                                         fontSize: 11,
@@ -1735,7 +1890,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                           textAlign: TextAlign.right,
                           keyboardType: TextInputType.number,
                           decoration: InputDecoration(
-                            suffixText: _grandDiscountType == DiscountType.percentage ? '%' : '\$',
+                            suffixText: _grandDiscountType == DiscountType.percentage ? '%' : '',
                             suffixStyle: TextStyle(
                               color: _pearlWhite.withOpacity(0.5),
                               fontSize: 14,
@@ -1772,7 +1927,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        'Discount: -\$${_grandDiscountAmount.toStringAsFixed(2)}',
+                        'Discount: -${_grandDiscountAmount.toStringAsFixed(2)}',
                         style: const TextStyle(
                           color: _crimsonRed,
                           fontSize: 12,
@@ -1787,7 +1942,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
           ),
 
           const SizedBox(height: 8),
-          _buildSummaryRow('Tax Total', '+\$${_taxTotal.toStringAsFixed(2)}',
+          _buildSummaryRow('Tax Total', '+${_taxTotal.toStringAsFixed(2)}',
               color: _emeraldGreen),
           const Divider(color: Colors.white24, height: 20),
 
@@ -1819,7 +1974,7 @@ class _CreateQuotationScreenState extends State<CreateQuotationScreen>
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    '\$${_grandTotal.toStringAsFixed(2)}',
+                    '${_grandTotal.toStringAsFixed(2)}',
                     style: const TextStyle(
                       color: _pearlWhite,
                       fontSize: 20,

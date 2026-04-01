@@ -7,6 +7,7 @@ import '../CustomerPages/BillListPage.dart';
 import '../CustomerPages/CreateQuotationScreen.dart';
 import '../CustomerPages/QuotationsListScreen.dart';
 import '../Models/customer_model.dart';
+import '../items/ItemslistPage.dart';
 
 class ManagerDashboard extends StatefulWidget {
   const ManagerDashboard({super.key});
@@ -1670,6 +1671,7 @@ class _ManagerDashboardState extends State<ManagerDashboard>
     return Scaffold(
       backgroundColor: _darkNavy,
       appBar: AppBar(
+        automaticallyImplyLeading: false,
         backgroundColor: _charcoalBlue,
         elevation: 0,
         title: Row(
@@ -1846,6 +1848,7 @@ class _ManagerDashboardState extends State<ManagerDashboard>
             children: [
               _buildMyTeamsTab(), // Multiple teams view
               _buildAvailableWorkersTab(),
+              // _itemsListpage(),
               _buildManagerCustomersTab(),
             ],
           ),
@@ -1906,11 +1909,24 @@ class _ManagerDashboardState extends State<ManagerDashboard>
                 ),
                 label: 'Add Workers',
               ),
+              // BottomNavigationBarItem(
+              //   icon: Container(
+              //     padding: const EdgeInsets.all(6),
+              //     decoration: BoxDecoration(
+              //       color: _selectedIndex == 2
+              //           ? _deepPurple.withOpacity(0.1)
+              //           : Colors.transparent,
+              //       borderRadius: BorderRadius.circular(10),
+              //     ),
+              //     child: const Icon(Icons.person_add_alt_1_rounded),
+              //   ),
+              //   label: 'Item Management',
+              // ),//s
               BottomNavigationBarItem(
                 icon: Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: _selectedIndex == 2
+                    color: _selectedIndex == 3
                         ? _emeraldGreen.withOpacity(0.1)
                         : Colors.transparent,
                     borderRadius: BorderRadius.circular(10),
@@ -3169,5 +3185,9 @@ class _ManagerDashboardState extends State<ManagerDashboard>
         ),
       ],
     );
+  }
+
+  Widget _itemsListpage(){
+    return ItemsListPage();
   }
 }
